@@ -319,7 +319,7 @@ export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps
 
   return (
     <>
-      <div className="flex flex-col space-y-4">
+      <div className="flex flex-col space-y-4 mx-auto">
         <div className="flex justify-between items-center">
           <h1 className="text-2xl font-bold">Prova ENEM {year}</h1>
           <div className="flex items-center">
