@@ -34,6 +34,9 @@ interface Answer {
   timeSpent: number
 }
 
+// LocalStorage key for saving attempt data
+const getStorageKey = (attemptId: string) => `exam_attempt_${attemptId}`
+
 export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps) {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [answers, setAnswers] = useState<Answer[]>([])
@@ -42,6 +45,7 @@ export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps
   const [elapsedTime, setElapsedTime] = useState(0)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
+  const [isInitialized, setIsInitialized] = useState(false)
   const router = useRouter()
   const supabase = getSupabaseBrowserClient()
   const { toast } = useToast()
@@ -49,26 +53,99 @@ export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps
   const currentQuestion = questions[currentQuestionIndex]
   const progress = ((currentQuestionIndex + 1) / questions.length) * 100
 
-  // Initialize answers array
+  // Initialize answers array and load saved progress from localStorage
   useEffect(() => {
-    if (questions.length > 0) {
-      const initialAnswers = questions.map((q) => ({
-        questionId: q.id,
-        selectedOption: "",
-        timeSpent: 0,
-      }))
-      setAnswers(initialAnswers)
+    if (questions.length > 0 && !isInitialized) {
+      // Try to restore saved progress from localStorage
+      const savedData = localStorage.getItem(getStorageKey(attemptId))
+      
+      if (savedData) {
+        try {
+          const { answers: savedAnswers, startTimeStr, currentIndex, elapsedSeconds } = JSON.parse(savedData)
+          
+          // Validate the saved data to make sure it matches with the current exam
+          if (savedAnswers && savedAnswers.length === questions.length) {
+            setAnswers(savedAnswers)
+            setCurrentQuestionIndex(currentIndex || 0)
+            
+            // Restore timing data
+            if (startTimeStr) {
+              const savedStartTime = new Date(startTimeStr)
+              setStartTime(savedStartTime)
+              setElapsedTime(elapsedSeconds || 0)
+            }
+            
+            toast({
+              title: "Progresso restaurado",
+              description: "Seu progresso anterior foi carregado automaticamente.",
+            })
+          } else {
+            initializeNewAttempt()
+          }
+        } catch (e) {
+          console.error("Error parsing saved exam data:", e)
+          initializeNewAttempt()
+        }
+      } else {
+        initializeNewAttempt()
+      }
+      
+      setIsInitialized(true)
     }
-  }, [questions])
+  }, [questions, attemptId, isInitialized, toast])
+
+  // Initialize a new attempt
+  const initializeNewAttempt = () => {
+    const initialAnswers = questions.map((q) => ({
+      questionId: q.id,
+      selectedOption: "",
+      timeSpent: 0,
+    }))
+    setAnswers(initialAnswers)
+    const now = new Date()
+    setStartTime(now)
+    setQuestionStartTime(now)
+    setElapsedTime(0)
+  }
+
+  // Save current progress to localStorage
+  const saveProgressToLocalStorage = () => {
+    try {
+      const dataToSave = {
+        answers,
+        startTimeStr: startTime.toISOString(),
+        currentIndex: currentQuestionIndex,
+        elapsedSeconds: elapsedTime,
+      }
+      localStorage.setItem(getStorageKey(attemptId), JSON.stringify(dataToSave))
+    } catch (e) {
+      console.error("Error saving progress to localStorage:", e)
+    }
+  }
 
   // Timer for the entire exam
   useEffect(() => {
     const timer = setInterval(() => {
-      setElapsedTime(Math.floor((new Date().getTime() - startTime.getTime()) / 1000))
+      const newElapsedTime = Math.floor((new Date().getTime() - startTime.getTime()) / 1000)
+      setElapsedTime(newElapsedTime)
+      
+      // Save progress every 30 seconds
+      if (newElapsedTime % 30 === 0) {
+        saveProgressToLocalStorage()
+      }
     }, 1000)
 
     return () => clearInterval(timer)
   }, [startTime])
+
+  // Save progress when unmounting component
+  useEffect(() => {
+    return () => {
+      if (isInitialized) {
+        saveProgressToLocalStorage()
+      }
+    }
+  }, [answers, currentQuestionIndex, elapsedTime, isInitialized])
 
   // Format time as HH:MM:SS
   const formatTime = (seconds: number) => {
@@ -126,44 +203,62 @@ export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps
           time_spent: timeSpent,
         })
       }
+      
+      // Save to localStorage after each answer update
+      saveProgressToLocalStorage()
     } catch (error) {
       console.error("Error saving answer:", error)
+      toast({
+        title: "Erro ao salvar resposta",
+        description: "Sua resposta foi salva localmente, mas não foi sincronizada com o servidor.",
+        variant: "destructive",
+      })
     }
+  }
+
+  const recordTimeOnCurrentQuestion = () => {
+    const now = new Date()
+    const timeSpent = Math.floor((now.getTime() - questionStartTime.getTime()) / 1000)
+
+    const updatedAnswers = [...answers]
+    updatedAnswers[currentQuestionIndex] = {
+      ...updatedAnswers[currentQuestionIndex],
+      timeSpent: updatedAnswers[currentQuestionIndex].timeSpent + timeSpent,
+    }
+
+    return updatedAnswers
   }
 
   const goToNextQuestion = () => {
     if (currentQuestionIndex < questions.length - 1) {
       // Record time spent on current question before moving
-      const now = new Date()
-      const timeSpent = Math.floor((now.getTime() - questionStartTime.getTime()) / 1000)
-
-      const updatedAnswers = [...answers]
-      updatedAnswers[currentQuestionIndex] = {
-        ...updatedAnswers[currentQuestionIndex],
-        timeSpent: updatedAnswers[currentQuestionIndex].timeSpent + timeSpent,
-      }
-
+      const updatedAnswers = recordTimeOnCurrentQuestion()
       setAnswers(updatedAnswers)
       setCurrentQuestionIndex(currentQuestionIndex + 1)
-      setQuestionStartTime(now)
+      setQuestionStartTime(new Date())
+      saveProgressToLocalStorage()
     }
   }
 
   const goToPreviousQuestion = () => {
     if (currentQuestionIndex > 0) {
       // Record time spent on current question before moving
-      const now = new Date()
-      const timeSpent = Math.floor((now.getTime() - questionStartTime.getTime()) / 1000)
-
-      const updatedAnswers = [...answers]
-      updatedAnswers[currentQuestionIndex] = {
-        ...updatedAnswers[currentQuestionIndex],
-        timeSpent: updatedAnswers[currentQuestionIndex].timeSpent + timeSpent,
-      }
-
+      const updatedAnswers = recordTimeOnCurrentQuestion()
       setAnswers(updatedAnswers)
       setCurrentQuestionIndex(currentQuestionIndex - 1)
-      setQuestionStartTime(now)
+      setQuestionStartTime(new Date())
+      saveProgressToLocalStorage()
+    }
+  }
+  
+  // Jump directly to a specific question
+  const goToQuestion = (index: number) => {
+    if (index >= 0 && index < questions.length) {
+      const updatedAnswers = recordTimeOnCurrentQuestion()
+      setAnswers(updatedAnswers)
+      setCurrentQuestionIndex(index)
+      setQuestionStartTime(new Date())
+      saveProgressToLocalStorage()
     }
   }
 
@@ -171,9 +266,13 @@ export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps
     setIsSubmitting(true)
 
     try {
+      // Final update of time spent on current question
+      const updatedAnswers = recordTimeOnCurrentQuestion()
+      setAnswers(updatedAnswers)
+
       // Calculate final stats
       const totalQuestions = questions.length
-      const answeredQuestions = answers.filter((a) => a.selectedOption !== "").length
+      const answeredQuestions = updatedAnswers.filter((a) => a.selectedOption !== "").length
 
       // Get correct answers from the database
       const { data: responses } = await supabase
@@ -197,6 +296,9 @@ export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps
           time_spent: elapsedTime,
         })
         .eq("id", attemptId)
+
+      // Clear local storage for this attempt
+      localStorage.removeItem(getStorageKey(attemptId))
 
       // Redirect to results page
       router.push(`/results/${attemptId}`)
@@ -237,6 +339,26 @@ export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps
 
         <Progress value={progress} className="h-2" />
 
+        {/* Question Navigation Panel */}
+        <div className="flex flex-wrap gap-2 my-2">
+          {questions.map((_, index) => {
+            const isAnswered = answers[index]?.selectedOption !== "";
+            const isCurrent = index === currentQuestionIndex;
+            
+            return (
+              <Button
+                key={index}
+                variant={isCurrent ? "default" : isAnswered ? "secondary" : "outline"}
+                size="sm"
+                className={`w-8 h-8 p-0 ${isCurrent ? "ring-2 ring-primary" : ""}`}
+                onClick={() => goToQuestion(index)}
+              >
+                {index + 1}
+              </Button>
+            );
+          })}
+        </div>
+
         <Card className="mt-4">
           <CardContent className="pt-6">
             <div className="space-y-6">
@@ -274,7 +396,7 @@ export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps
                 className="space-y-3"
               >
                 {currentQuestion.options.map((option) => (
-                  <div key={option.key} className="flex items-start space-x-2 border p-4 rounded-md">
+                  <div key={option.key} className="flex items-start space-x-2 border p-4 rounded-md hover:bg-accent">
                     <RadioGroupItem value={option.key} id={`option-${option.key}`} />
                     <Label htmlFor={`option-${option.key}`} className="flex-1 cursor-pointer">
                       <span className="font-medium mr-2">{option.key})</span>
