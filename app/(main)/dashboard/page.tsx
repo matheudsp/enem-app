@@ -8,7 +8,7 @@ import { Calendar, Clock, ExternalLink } from "lucide-react"
 import { DashboardChart } from "./dashboard-chart"
 
 export default async function DashboardPage() {
-  const supabase = getSupabaseServerClient()
+  const supabase = await getSupabaseServerClient()
   const {
     data: { session },
   } = await supabase.auth.getSession()

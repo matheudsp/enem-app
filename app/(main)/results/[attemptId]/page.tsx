@@ -11,7 +11,7 @@ export default async function ResultsPage({
 }: {
   params: { attemptId: string }
 }) {
-  const supabase = getSupabaseServerClient()
+  const supabase = await getSupabaseServerClient()
   const {
     data: { session },
   } = await supabase.auth.getSession()

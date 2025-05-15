@@ -4,7 +4,7 @@ import { redirect } from "next/navigation"
 import { ExamList } from "./exam-list"
 
 export default async function HomePage() {
-  const supabase = getSupabaseServerClient()
+  const supabase = await getSupabaseServerClient()
   const {
     data: { session },
   } = await supabase.auth.getSession()

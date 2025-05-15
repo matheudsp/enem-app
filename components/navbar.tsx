@@ -46,7 +46,7 @@ export function Navbar() {
                     isActive("/dashboard") ? "text-primary" : "text-muted-foreground hover:text-primary"
                   }`}
                 >
-                  Dashboard
+                  Painel de Resultados
                 </Link>
                 <Link
                   href="/history"
