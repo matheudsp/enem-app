@@ -46,6 +46,9 @@ export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
   const [isInitialized, setIsInitialized] = useState(false)
+  const [displayMode, setDisplayMode] = useState<"single" | "multiple">("single")
+  const [questionsPerPage, setQuestionsPerPage] = useState(10)
+  const [currentPage, setCurrentPage] = useState(0)
   const router = useRouter()
   const supabase = getSupabaseBrowserClient()
   const { toast } = useToast()
@@ -58,23 +61,23 @@ export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps
     if (questions.length > 0 && !isInitialized) {
       // Try to restore saved progress from localStorage
       const savedData = localStorage.getItem(getStorageKey(attemptId))
-      
+
       if (savedData) {
         try {
           const { answers: savedAnswers, startTimeStr, currentIndex, elapsedSeconds } = JSON.parse(savedData)
-          
+
           // Validate the saved data to make sure it matches with the current exam
           if (savedAnswers && savedAnswers.length === questions.length) {
             setAnswers(savedAnswers)
             setCurrentQuestionIndex(currentIndex || 0)
-            
+
             // Restore timing data
             if (startTimeStr) {
               const savedStartTime = new Date(startTimeStr)
               setStartTime(savedStartTime)
               setElapsedTime(elapsedSeconds || 0)
             }
-            
+
             toast({
               title: "Progresso restaurado",
               description: "Seu progresso anterior foi carregado automaticamente.",
@@ -89,7 +92,7 @@ export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps
       } else {
         initializeNewAttempt()
       }
-      
+
       setIsInitialized(true)
     }
   }, [questions, attemptId, isInitialized, toast])
@@ -128,7 +131,7 @@ export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps
     const timer = setInterval(() => {
       const newElapsedTime = Math.floor((new Date().getTime() - startTime.getTime()) / 1000)
       setElapsedTime(newElapsedTime)
-      
+
       // Save progress every 30 seconds
       if (newElapsedTime % 30 === 0) {
         saveProgressToLocalStorage()
@@ -155,22 +158,59 @@ export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps
     return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
   }
 
-  const handleOptionSelect = (option: string) => {
+  const getVisibleQuestions = () => {
+    if (displayMode === "single") {
+      return [questions[currentQuestionIndex]]
+    } else {
+      const startIndex = currentPage * questionsPerPage
+      return questions.slice(startIndex, startIndex + questionsPerPage)
+    }
+  }
+
+  const handlePageChange = (newPage: number) => {
+    // Record time spent on current question before moving
+    const updatedAnswers = recordTimeOnCurrentQuestion()
+    setAnswers(updatedAnswers)
+    setCurrentPage(newPage)
+    setQuestionStartTime(new Date())
+    saveProgressToLocalStorage()
+  }
+
+  const toggleDisplayMode = () => {
+    // Record time spent on current question before changing mode
+    const updatedAnswers = recordTimeOnCurrentQuestion()
+    setAnswers(updatedAnswers)
+
+    if (displayMode === "single") {
+      setDisplayMode("multiple")
+      // Calculate which page the current question is on
+      setCurrentPage(Math.floor(currentQuestionIndex / questionsPerPage))
+    } else {
+      setDisplayMode("single")
+      // Set the current question index to the first question on the current page
+      setCurrentQuestionIndex(currentPage * questionsPerPage)
+    }
+
+    setQuestionStartTime(new Date())
+    saveProgressToLocalStorage()
+  }
+
+  const handleOptionSelect = (option: string, questionIndex: number = currentQuestionIndex) => {
     const now = new Date()
     const timeSpent = Math.floor((now.getTime() - questionStartTime.getTime()) / 1000)
 
     const updatedAnswers = [...answers]
-    updatedAnswers[currentQuestionIndex] = {
-      ...updatedAnswers[currentQuestionIndex],
+    updatedAnswers[questionIndex] = {
+      ...updatedAnswers[questionIndex],
       selectedOption: option,
-      timeSpent: updatedAnswers[currentQuestionIndex].timeSpent + timeSpent,
+      timeSpent: updatedAnswers[questionIndex].timeSpent + timeSpent,
     }
 
     setAnswers(updatedAnswers)
     setQuestionStartTime(now)
 
     // Save the answer to the database
-    saveAnswer(currentQuestion.id, option, timeSpent)
+    saveAnswer(questions[questionIndex].id, option, timeSpent)
   }
 
   const saveAnswer = async (questionId: number, selectedOption: string, timeSpent: number) => {
@@ -203,7 +243,7 @@ export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps
           time_spent: timeSpent,
         })
       }
-      
+
       // Save to localStorage after each answer update
       saveProgressToLocalStorage()
     } catch (error) {
@@ -230,27 +270,42 @@ export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps
   }
 
   const goToNextQuestion = () => {
-    if (currentQuestionIndex < questions.length - 1) {
-      // Record time spent on current question before moving
-      const updatedAnswers = recordTimeOnCurrentQuestion()
-      setAnswers(updatedAnswers)
-      setCurrentQuestionIndex(currentQuestionIndex + 1)
-      setQuestionStartTime(new Date())
-      saveProgressToLocalStorage()
+    if (displayMode === "single") {
+      if (currentQuestionIndex < questions.length - 1) {
+        // Record time spent on current question before moving
+        const updatedAnswers = recordTimeOnCurrentQuestion()
+        setAnswers(updatedAnswers)
+        setCurrentQuestionIndex(currentQuestionIndex + 1)
+        setQuestionStartTime(new Date())
+        saveProgressToLocalStorage()
+      }
+    } else {
+      // In multiple questions mode, go to next page if available
+      const nextPage = currentPage + 1
+      if (nextPage * questionsPerPage < questions.length) {
+        handlePageChange(nextPage)
+      }
     }
   }
 
   const goToPreviousQuestion = () => {
-    if (currentQuestionIndex > 0) {
-      // Record time spent on current question before moving
-      const updatedAnswers = recordTimeOnCurrentQuestion()
-      setAnswers(updatedAnswers)
-      setCurrentQuestionIndex(currentQuestionIndex - 1)
-      setQuestionStartTime(new Date())
-      saveProgressToLocalStorage()
+    if (displayMode === "single") {
+      if (currentQuestionIndex > 0) {
+        // Record time spent on current question before moving
+        const updatedAnswers = recordTimeOnCurrentQuestion()
+        setAnswers(updatedAnswers)
+        setCurrentQuestionIndex(currentQuestionIndex - 1)
+        setQuestionStartTime(new Date())
+        saveProgressToLocalStorage()
+      }
+    } else {
+      // In multiple questions mode, go to previous page if available
+      if (currentPage > 0) {
+        handlePageChange(currentPage - 1)
+      }
     }
   }
-  
+
   // Jump directly to a specific question
   const goToQuestion = (index: number) => {
     if (index >= 0 && index < questions.length) {
@@ -320,109 +375,185 @@ export function ExamInterface({ year, questions, attemptId }: ExamInterfaceProps
   return (
     <>
       <div className="flex flex-col space-y-4 mx-auto">
-        <div className="flex justify-between items-center">
+        <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4">
           <h1 className="text-2xl font-bold">Prova ENEM {year}</h1>
-          <div className="flex items-center">
-            <Clock className="mr-2 h-5 w-5" />
-            <span className="font-mono">{formatTime(elapsedTime)}</span>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center">
+              <Clock className="mr-2 h-5 w-5" />
+              <span className="font-mono">{formatTime(elapsedTime)}</span>
+            </div>
+            <div className="flex items-center">
+              <Button variant="outline" size="sm" onClick={toggleDisplayMode} className="hidden md:flex">
+                {displayMode === "single" ? "Show Multiple Questions" : "Show One Question"}
+              </Button>
+              <Button variant="outline" size="sm" onClick={toggleDisplayMode} className="md:hidden">
+                {displayMode === "single" ? "Multiple" : "Single"}
+              </Button>
+            </div>
           </div>
         </div>
 
-        <div className="flex justify-between items-center">
+        <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-2">
           <div className="text-sm text-muted-foreground">
-            Questão {currentQuestionIndex + 1} de {questions.length}
+            {displayMode === "single" ? (
+              <>
+                Question {currentQuestionIndex + 1} of {questions.length}
+              </>
+            ) : (
+              <>
+                Page {currentPage + 1} of {Math.ceil(questions.length / questionsPerPage)}
+              </>
+            )}
           </div>
           <div className="text-sm">
-            {answers.filter((a) => a.selectedOption !== "").length} de {questions.length} respondidas
+            {answers.filter((a) => a.selectedOption !== "").length} of {questions.length} answered
           </div>
         </div>
 
-        <Progress value={progress} className="h-2" />
+        <Progress
+          value={
+            displayMode === "single"
+              ? ((currentQuestionIndex + 1) / questions.length) * 100
+              : ((currentPage + 1) / Math.ceil(questions.length / questionsPerPage)) * 100
+          }
+          className="h-2"
+        />
 
-        {/* Question Navigation Panel */}
-        <div className="flex flex-wrap gap-2 my-2">
+        {/* Question Navigation Panel - Responsive Grid */}
+        <div className="grid grid-cols-5 sm:grid-cols-10 gap-2 my-2">
           {questions.map((_, index) => {
-            const isAnswered = answers[index]?.selectedOption !== "";
-            const isCurrent = index === currentQuestionIndex;
-            
+            const isAnswered = answers[index]?.selectedOption !== ""
+            const isCurrent =
+              displayMode === "single"
+                ? index === currentQuestionIndex
+                : index >= currentPage * questionsPerPage && index < (currentPage + 1) * questionsPerPage
+
             return (
               <Button
                 key={index}
                 variant={isCurrent ? "default" : isAnswered ? "secondary" : "outline"}
                 size="sm"
                 className={`w-8 h-8 p-0 ${isCurrent ? "ring-2 ring-primary" : ""}`}
-                onClick={() => goToQuestion(index)}
+                onClick={() => {
+                  if (displayMode === "single") {
+                    goToQuestion(index)
+                  } else {
+                    handlePageChange(Math.floor(index / questionsPerPage))
+                  }
+                }}
               >
                 {index + 1}
               </Button>
-            );
+            )
           })}
         </div>
 
-        <Card className="mt-4">
-          <CardContent className="pt-6">
-            <div className="space-y-6">
-              <div className="space-y-4">
-                <h2 className="text-lg font-medium">Questão {currentQuestionIndex + 1}</h2>
+        {/* Questions Display */}
+        <div className="space-y-6">
+          {getVisibleQuestions().map((question, idx) => (
+            <Card key={question.id} className="mt-4">
+              <CardContent className="pt-6">
+                <div className="space-y-6">
+                  <div className="space-y-4">
+                    <h2 className="text-lg font-medium">
+                      {displayMode === "single"
+                        ? `Questão ${currentQuestionIndex + 1}`
+                        : `Questão ${currentPage * questionsPerPage + idx + 1}`}
+                    </h2>
 
-                {/* Context and images */}
-                {currentQuestion.context && (
-                  <div
-                    className="whitespace-pre-line mb-4"
-                    dangerouslySetInnerHTML={{ __html: currentQuestion.context }}
-                  />
-                )}
+                    {/* Context and images */}
+                    {question.context && (
+                      <div
+                        className="whitespace-pre-line mb-4"
+                        dangerouslySetInnerHTML={{ __html: question.context }}
+                      />
+                    )}
 
-                {currentQuestion.files && currentQuestion.files.length > 0 && (
-                  <div className="flex flex-col items-center gap-4 my-4">
-                    {currentQuestion.files.map((file, index) => (
-                      <div key={index} className="max-w-full">
-                        <img
-                          src={file || "/placeholder.svg"}
-                          alt={`Imagem da questão ${currentQuestionIndex + 1}`}
-                          className="max-w-full h-auto rounded-md"
+                    {question.files && question.files.length > 0 && (
+                      <div className="flex flex-col items-center gap-4 my-4">
+                        {question.files.map((file, index) => (
+                          <div key={index} className="max-w-full">
+                            <img
+                              src={file || "/placeholder.svg"}
+                              alt={`Imagem da questão ${
+                                displayMode === "single"
+                                  ? currentQuestionIndex + 1
+                                  : currentPage * questionsPerPage + idx + 1
+                              }`}
+                              className="max-w-full h-auto rounded-md"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <p className="whitespace-pre-line font-medium">{question.statement}</p>
+                  </div>
+
+                  <RadioGroup
+                    value={
+                      answers[displayMode === "single" ? currentQuestionIndex : currentPage * questionsPerPage + idx]
+                        ?.selectedOption || ""
+                    }
+                    onValueChange={(value) => {
+                      const questionIndex =
+                        displayMode === "single" ? currentQuestionIndex : currentPage * questionsPerPage + idx
+                      handleOptionSelect(value, questionIndex)
+                    }}
+                    className="space-y-3"
+                  >
+                    {question.options.map((option) => (
+                      <div
+                        key={option.key}
+                        className="flex items-start space-x-2 border p-4 rounded-md hover:bg-accent"
+                      >
+                        <RadioGroupItem
+                          value={option.key}
+                          id={`option-${
+                            displayMode === "single" ? currentQuestionIndex : currentPage * questionsPerPage + idx
+                          }-${option.key}`}
                         />
+                        <Label
+                          htmlFor={`option-${
+                            displayMode === "single" ? currentQuestionIndex : currentPage * questionsPerPage + idx
+                          }-${option.key}`}
+                          className="flex-1 cursor-pointer"
+                        >
+                          <span className="font-medium mr-2">{option.key})</span>
+                          <span className="whitespace-pre-line">{option.value}</span>
+                        </Label>
                       </div>
                     ))}
-                  </div>
-                )}
-
-                <p className="whitespace-pre-line font-medium">{currentQuestion.statement}</p>
-              </div>
-
-              <RadioGroup
-                value={answers[currentQuestionIndex]?.selectedOption || ""}
-                onValueChange={handleOptionSelect}
-                className="space-y-3"
-              >
-                {currentQuestion.options.map((option) => (
-                  <div key={option.key} className="flex items-start space-x-2 border p-4 rounded-md hover:bg-accent">
-                    <RadioGroupItem value={option.key} id={`option-${option.key}`} />
-                    <Label htmlFor={`option-${option.key}`} className="flex-1 cursor-pointer">
-                      <span className="font-medium mr-2">{option.key})</span>
-                      <span className="whitespace-pre-line">{option.value}</span>
-                    </Label>
-                  </div>
-                ))}
-              </RadioGroup>
-            </div>
-          </CardContent>
-        </Card>
+                  </RadioGroup>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
 
         <div className="flex justify-between mt-4">
-          <Button variant="outline" onClick={goToPreviousQuestion} disabled={currentQuestionIndex === 0}>
+          <Button
+            variant="outline"
+            onClick={goToPreviousQuestion}
+            disabled={displayMode === "single" ? currentQuestionIndex === 0 : currentPage === 0}
+          >
             <ChevronLeft className="mr-2 h-4 w-4" />
-            Anterior
+            {displayMode === "single" ? "Anterior" : "Página Anterior"}
           </Button>
 
-          {currentQuestionIndex === questions.length - 1 ? (
+          {displayMode === "single" && currentQuestionIndex === questions.length - 1 ? (
+            <Button onClick={() => setShowConfirmDialog(true)} disabled={isSubmitting}>
+              <Save className="mr-2 h-4 w-4" />
+              Finalizar Prova
+            </Button>
+          ) : displayMode === "multiple" && (currentPage + 1) * questionsPerPage >= questions.length ? (
             <Button onClick={() => setShowConfirmDialog(true)} disabled={isSubmitting}>
               <Save className="mr-2 h-4 w-4" />
               Finalizar Prova
             </Button>
           ) : (
             <Button onClick={goToNextQuestion}>
-              Próxima
+              {displayMode === "single" ? "Próxima" : "Próxima Página"}
               <ChevronRight className="ml-2 h-4 w-4" />
             </Button>
           )}
