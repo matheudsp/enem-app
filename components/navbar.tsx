@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { useAuth } from "./auth-provider"
+import { useAuth } from "../auth/auth-provider"
 import { Button } from "./ui/button"
 import {
   DropdownMenu,
